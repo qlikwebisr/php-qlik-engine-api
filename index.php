@@ -64,7 +64,8 @@ function connectToQlikEngine() {
         "Connection: Upgrade",
         "Sec-WebSocket-Key: $key",
         "Sec-WebSocket-Version: 13",
-        "X-Qlik-User: UserDirectory=internal; UserId=sa_engine"
+        "X-Qlik-User: UserDirectory=ALEX-PC; UserId=lenovo"
+        //"X-Qlik-User: UserDirectory=internal; UserId=sa   _engine"
     ];
     
     fwrite($socket, implode("\r\n", $headers) . "\r\n\r\n");
@@ -286,6 +287,255 @@ function readMessageById($socket, $expectedId, $timeoutSeconds = 30) {
     return null;
 }
 
+// Function to establish a connection and select a field value
+function selectFieldValue($appId, $fieldName, $fieldValue) {
+    global $certPath;
+    
+    echo "0. Connecting to Qlik app: $appId to select field: $fieldName = $fieldValue\n";
+    
+    $host = 'localhost';
+    $port = 4747;
+    $path = '/app/' . $appId;
+    
+    // Create SSL context with certificates
+    $context = stream_context_create([
+        'ssl' => [
+            'local_cert' => $certPath . '/client.pem',
+            'local_pk' => $certPath . '/client_key.pem',
+            'cafile' => $certPath . '/root.pem',
+            'verify_peer' => false,
+            'verify_peer_name' => false,
+            'allow_self_signed' => true
+        ]
+    ]);
+    
+    // Connect using SSL to localhost
+    echo "1. Creating SSL socket connection...\n";
+    $socket = @stream_socket_client(
+        'ssl://' . $host . ':' . $port,
+        $errno,
+        $errstr,
+        30,
+        STREAM_CLIENT_CONNECT,
+        $context
+    );
+    
+    if (!$socket) {
+        die("Error connecting to Qlik Sense Engine: $errstr ($errno)\n");
+    }
+    
+    // Set socket timeout
+    stream_set_timeout($socket, 30);
+    
+    // Perform WebSocket handshake
+    echo "2. Performing WebSocket handshake...\n";
+    $key = base64_encode(openssl_random_pseudo_bytes(16));
+    $headers = [
+        "GET $path HTTP/1.1",
+        "Host: $host:$port",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        "Sec-WebSocket-Key: $key",
+        "Sec-WebSocket-Version: 13",
+        "X-Qlik-User: UserDirectory=ALEX-PC; UserId=lenovo"
+    ];
+    
+    fwrite($socket, implode("\r\n", $headers) . "\r\n\r\n");
+    
+    // Read handshake response with timeout handling
+    $response = '';
+    $startTime = time();
+    $timeoutSeconds = 10;
+    
+    while (!feof($socket) && (time() - $startTime) < $timeoutSeconds) {
+        $line = fgets($socket, 1024);
+        if ($line === false) {
+            $info = stream_get_meta_data($socket);
+            if ($info['timed_out']) {
+                die("Socket timed out while reading handshake response\n");
+            }
+            break;
+        }
+        
+        $response .= $line;
+        if ($line === "\r\n") break;
+    }
+    
+    // Check if handshake was successful
+    if (strpos($response, "101 Switching Protocols") === false) {
+        die("WebSocket handshake failed: " . $response);
+    }
+    
+    echo "3. Connected to app! WebSocket handshake successful\n";
+    
+    // Handle initial connection notification
+    $initialResponse = readWebSocketFrame($socket, 10);
+    if ($initialResponse) {
+        echo "Initial connection message: " . $initialResponse . "\n";
+    }
+    
+    // Step 1: Open the Document
+    $openDocRequest = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 1,
+        'method' => 'OpenDoc',
+        'handle' => -1,
+        'params' => [
+            $appId
+        ]
+    ]);
+    
+    // Send OpenDoc request
+    fwrite($socket, createWebSocketFrame($openDocRequest));
+    echo "4. Sent OpenDoc request for app: $appId\n";
+    
+    // Read the document response
+    $docResponse = readMessageById($socket, 1, 10);
+    if (!$docResponse) {
+        die("Failed to get document response\n");
+    }
+    
+    $docData = json_decode($docResponse, true);
+    if (isset($docData['error'])) {
+        die("Error opening document: " . json_encode($docData['error']) . "\n");
+    }
+    
+    $docHandle = $docData['result']['qReturn']['qHandle'];
+    echo "5. Document opened with handle: $docHandle\n";
+    
+    // Step 2: Create a session object for field selection
+    $createSessionObjectRequest = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 2,
+        'method' => 'CreateSessionObject',
+        'handle' => $docHandle,
+        'params' => [
+            [
+                'qInfo' => [
+                    'qType' => 'ListObject',
+                    'qId' => ''
+                ],
+                'qListObjectDef' => [
+                    'qDef' => [
+                        'qFieldDefs' => [
+                            $fieldName
+                        ]
+                    ],
+                    'qInitialDataFetch' => [
+                        [
+                            'qTop' => 0,
+                            'qLeft' => 0,
+                            'qHeight' => 100,
+                            'qWidth' => 1
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    ]);
+    
+    // Send CreateSessionObject request
+    fwrite($socket, createWebSocketFrame($createSessionObjectRequest));
+    echo "6. Sent CreateSessionObject request for field: $fieldName\n";
+    
+    // Read the session object response
+    $sessionResponse = readMessageById($socket, 2, 10);
+    if (!$sessionResponse) {
+        die("Failed to get session object response\n");
+    }
+    
+    $sessionData = json_decode($sessionResponse, true);
+    if (isset($sessionData['error'])) {
+        die("Error creating session object: " . json_encode($sessionData['error']) . "\n");
+    }
+    
+    $listObjectHandle = $sessionData['result']['qReturn']['qHandle'];
+    echo "7. Created list object with handle: $listObjectHandle\n";
+    
+    // Step 3: Get the layout to find the values
+    $getLayoutRequest = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 3,
+        'method' => 'GetLayout',
+        'handle' => $listObjectHandle,
+        'params' => []
+    ]);
+    
+    // Send GetLayout request
+    fwrite($socket, createWebSocketFrame($getLayoutRequest));
+    echo "8. Sent GetLayout request for list object\n";
+    
+    // Read the layout response
+    $layoutResponse = readMessageById($socket, 3, 10);
+    if (!$layoutResponse) {
+        die("Failed to get layout\n");
+    }
+    
+    $layoutData = json_decode($layoutResponse, true);
+    if (isset($layoutData['error'])) {
+        die("Error getting layout: " . json_encode($layoutData['error']) . "\n");
+    }
+    
+    // Get the qMatrix which contains the field values
+    if (!isset($layoutData['result']['qLayout']['qListObject']['qDataPages'][0]['qMatrix'])) {
+        die("Unexpected layout format\n");
+    }
+    
+    $matrix = $layoutData['result']['qLayout']['qListObject']['qDataPages'][0]['qMatrix'];
+    echo "9. Retrieved list of values for field: $fieldName\n";
+    
+    // Find the element number of our target value
+    $elementNumber = null;
+    foreach ($matrix as $row) {
+        if (isset($row[0]['qText']) && $row[0]['qText'] === $fieldValue) {
+            $elementNumber = $row[0]['qElemNumber'];
+            break;
+        }
+    }
+    
+    if ($elementNumber === null) {
+        die("Value '$fieldValue' not found in field '$fieldName'\n");
+    }
+    
+    echo "10. Found value '$fieldValue' with element number: $elementNumber\n";
+    
+    // Step 4: Select the value using the element number
+    $selectValuesRequest = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 4,
+        'method' => 'SelectListObjectValues',
+        'handle' => $listObjectHandle,
+        'params' => [
+            '/qListObjectDef',
+            [$elementNumber],  // Element numbers to select
+            false  // Toggle selection mode (false = replace current selection)
+        ]
+    ]);
+    
+    // Send SelectValues request
+    fwrite($socket, createWebSocketFrame($selectValuesRequest));
+    echo "11. Sent select request for value: $fieldValue (element: $elementNumber)\n";
+    
+    // Read the select response
+    $selectResponse = readMessageById($socket, 4, 10);
+    if (!$selectResponse) {
+        die("Failed to get selection response\n");
+    }
+    
+    $selectData = json_decode($selectResponse, true);
+    if (isset($selectData['error'])) {
+        die("Error selecting value: " . json_encode($selectData['error']) . "\n");
+    }
+    
+    echo "12. Value '$fieldValue' selected in field '$fieldName'\n";
+    
+    // Close the connection
+    fclose($socket);
+    echo "13. Selection complete, connection closed\n";
+    
+    return true;
+}
+
 // Function to connect to specific app and retrieve hypercube data
 function getQlikObjectData($appId, $objectId) {
     global $certPath;
@@ -336,7 +586,7 @@ function getQlikObjectData($appId, $objectId) {
         "Connection: Upgrade",
         "Sec-WebSocket-Key: $key",
         "Sec-WebSocket-Version: 13",
-        "X-Qlik-User: UserDirectory=internal; UserId=sa_engine"
+        "X-Qlik-User: UserDirectory=ALEX-PC; UserId=lenovo"
     ];
     
     fwrite($socket, implode("\r\n", $headers) . "\r\n\r\n");
@@ -612,12 +862,12 @@ function getQlikObjectData($appId, $objectId) {
 
 // Run the connection
 try {
-    // Example: Connect to general API
-    // echo "Starting Qlik Sense Engine connection...\n";
-    // connectToQlikEngine();
-    // echo "Connection complete\n";
+    // First, select the field value
+    echo "Starting field selection...\n";
+    selectFieldValue('1f8ebe62-f436-4a90-a878-510c022c3326', 'DEPARTMENT', 'Ladies Bag');
+    echo "Field selection complete\n";
     
-    // Example: Get data from specific app and object
+    // Then, get the object data
     echo "Starting Qlik Object Data retrieval...\n";
     $data = getQlikObjectData('1f8ebe62-f436-4a90-a878-510c022c3326', 'UQWGWCF');
     echo "Data retrieval complete\n";
