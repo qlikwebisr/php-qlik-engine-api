@@ -3,3 +3,4 @@
 *.lock
 *.txt
 *.json
+!composer.json
