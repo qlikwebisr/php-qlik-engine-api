@@ -1,0 +1,84 @@
+{
+    "headers": [
+        "Store Name",
+        "Sales",
+        "Returns"
+    ],
+    "data": [
+        [
+            "Camarillo Premium Outlets",
+            4688183.326668218,
+            21
+        ],
+        [
+            "Carlsbad Premium Outlets",
+            4384821.168285595,
+            33
+        ],
+        [
+            "Citadel Outlets",
+            5799110.6167001305,
+            23
+        ],
+        [
+            "Clinton Crossing Premium Outlets",
+            3002762.222384514,
+            24
+        ],
+        [
+            "Desert Hills Premium Outlets",
+            5327328.227407772,
+            6
+        ],
+        [
+            "Dolphin Mall",
+            3378576.3660227573,
+            15
+        ],
+        [
+            "Gilroy Premium Outlets",
+            4053290.159522013,
+            9
+        ],
+        [
+            "Milpitas Great Mall",
+            3360013.7455048906,
+            12
+        ],
+        [
+            "Ontario Mills",
+            3048382.208021189,
+            20
+        ],
+        [
+            "Orlando Vineland Premium Outlets",
+            840135.5178820923,
+            13
+        ],
+        [
+            "Outlets at Barstow",
+            3883275.671336435,
+            36
+        ],
+        [
+            "Outlets at Orange",
+            2756833.0954273753,
+            14
+        ],
+        [
+            "Phoenix Premium Outlets",
+            3447062.9188802526,
+            13
+        ],
+        [
+            "San Francisco Premium Outlets",
+            1459765.4631870156,
+            13
+        ],
+        [
+            "Vacaville Premium Outlets",
+            3710815.751350887,
+            18
+        ]
+    ]
+}

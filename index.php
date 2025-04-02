@@ -252,6 +252,40 @@ function readWebSocketFrame($socket, $timeoutSeconds = 10) {
     return $payload;
 }
 
+// Function to read a specific message by ID
+function readMessageById($socket, $expectedId, $timeoutSeconds = 30) {
+    $startTime = time();
+    
+    while ((time() - $startTime) < $timeoutSeconds) {
+        $response = readWebSocketFrame($socket, 5);
+        if (!$response) {
+            continue;
+        }
+        
+        echo "Received message: " . $response . "\n";
+        
+        $data = json_decode($response, true);
+        if ($data === null) {
+            echo "Warning: Failed to parse JSON: " . json_last_error_msg() . "\n";
+            continue;
+        }
+        
+        // Check if this is an event/notification message (has 'method' property)
+        if (isset($data['method'])) {
+            echo "Received notification: " . $data['method'] . "\n";
+            continue; // Skip notifications, keep waiting for our response
+        }
+        
+        // Check if this is our expected response (has matching 'id')
+        if (isset($data['id']) && $data['id'] === $expectedId) {
+            return $response;
+        }
+    }
+    
+    echo "Timeout waiting for message ID: $expectedId\n";
+    return null;
+}
+
 // Function to connect to specific app and retrieve hypercube data
 function getQlikObjectData($appId, $objectId) {
     global $certPath;
@@ -333,12 +367,70 @@ function getQlikObjectData($appId, $objectId) {
     
     echo "3. Connected to app! WebSocket handshake successful\n";
     
-    // Step 1: Get the handle for the specified object using the GetObject method
-    $getObjectRequest = json_encode([
+    // Step 1: First, we need to open the document
+    $openDocRequest = json_encode([
         'jsonrpc' => '2.0',
         'id' => 1,
+        'method' => 'OpenDoc',
+        'handle' => -1,
+        'params' => [
+            $appId // App ID is the document ID
+        ]
+    ]);
+    
+    // Send OpenDoc request
+    fwrite($socket, createWebSocketFrame($openDocRequest));
+    echo "4. Sent OpenDoc request for app: $appId\n";
+    
+    // Read first message (usually OnConnected notification)
+    $initialResponse = readWebSocketFrame($socket, 10);
+    if ($initialResponse) {
+        echo "Initial connection message: " . $initialResponse . "\n";
+        
+        // Parse it to see if it's a notification
+        $initialData = json_decode($initialResponse, true);
+        if ($initialData && isset($initialData['method']) && $initialData['method'] === 'OnConnected') {
+            echo "Received OnConnected notification\n";
+            
+            // Now read the actual OpenDoc response with our message ID
+            $docResponse = readMessageById($socket, 1, 10);
+        } else {
+            // If it's not the OnConnected notification, it might be our actual response
+            $docResponse = $initialResponse;
+        }
+    } else {
+        die("Failed to get any response\n");
+    }
+    
+    if (!$docResponse) {
+        die("Failed to get document response\n");
+    }
+    
+    // Debug: Print raw response
+    echo "Raw document response: " . $docResponse . "\n";
+    
+    $docData = json_decode($docResponse, true);
+    if ($docData === null) {
+        die("Failed to parse document response JSON: " . json_last_error_msg() . "\n");
+    }
+    
+    if (isset($docData['error'])) {
+        die("Error opening document: " . json_encode($docData['error']) . "\n");
+    }
+    
+    if (!isset($docData['result']) || !isset($docData['result']['qReturn']) || !isset($docData['result']['qReturn']['qHandle'])) {
+        die("Unexpected document response format. Response: " . $docResponse . "\n");
+    }
+    
+    $docHandle = $docData['result']['qReturn']['qHandle'];
+    echo "5. Document opened with handle: $docHandle\n";
+    
+    // Step 2: Get the object using GetObject with the document handle
+    $getObjectRequest = json_encode([
+        'jsonrpc' => '2.0',
+        'id' => 2,
         'method' => 'GetObject',
-        'handle' => -1, // Doc handle is always -1 after opening a connection to an app
+        'handle' => $docHandle, // Use the document handle here
         'params' => [
             $objectId
         ]
@@ -346,10 +438,11 @@ function getQlikObjectData($appId, $objectId) {
     
     // Send GetObject request
     fwrite($socket, createWebSocketFrame($getObjectRequest));
-    echo "4. Sent GetObject request for object: $objectId\n";
+    echo "6. Sent GetObject request for object: $objectId\n";
     
-    // Read response
-    $objectResponse = readWebSocketFrame($socket, 10);
+    // Read the actual object response with our message ID
+    $objectResponse = readMessageById($socket, 2, 10);
+    
     if (!$objectResponse) {
         die("Failed to get object response\n");
     }
@@ -370,13 +463,13 @@ function getQlikObjectData($appId, $objectId) {
         die("Unexpected response format. Response: " . $objectResponse . "\n");
     }
     
-    echo "5. Received object handle\n";
+    echo "7. Received object handle\n";
     $objectHandle = $objectData['result']['qReturn']['qHandle'];
     
     // Step 2: Get hypercube data using the GetLayout method
     $getLayoutRequest = json_encode([
         'jsonrpc' => '2.0',
-        'id' => 2,
+        'id' => 3,
         'method' => 'GetLayout',
         'handle' => $objectHandle,
         'params' => []
@@ -386,8 +479,8 @@ function getQlikObjectData($appId, $objectId) {
     fwrite($socket, createWebSocketFrame($getLayoutRequest));
     echo "6. Sent GetLayout request for object handle: $objectHandle\n";
     
-    // Read response
-    $layoutResponse = readWebSocketFrame($socket, 10);
+    // Read the actual layout response with our message ID
+    $layoutResponse = readMessageById($socket, 3, 10);
     if (!$layoutResponse) {
         die("Failed to get layout response\n");
     }
@@ -424,7 +517,7 @@ function getQlikObjectData($appId, $objectId) {
         // Get data page request
         $dataPageRequest = json_encode([
             'jsonrpc' => '2.0',
-            'id' => 3,
+            'id' => 4,
             'method' => 'GetHyperCubeData',
             'handle' => $objectHandle,
             'params' => [
@@ -444,8 +537,8 @@ function getQlikObjectData($appId, $objectId) {
         fwrite($socket, createWebSocketFrame($dataPageRequest));
         echo "9. Sent hypercube data request\n";
         
-        // Read response
-        $dataResponse = readWebSocketFrame($socket, 10);
+        // Read the actual data response with our message ID
+        $dataResponse = readMessageById($socket, 4, 10);
         if (!$dataResponse) {
             die("Failed to get hypercube data response\n");
         }
