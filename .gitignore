@@ -1,4 +1,5 @@
 /vendor
-/certs/*
+/certs/*.pem
 *.lock
 *.txt
+*.json
